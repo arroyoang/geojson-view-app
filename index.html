@@ -1,0 +1,911 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple GeoJson Plotting App</title>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 1rem;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .header h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+        
+        .controls {
+            background: white;
+            padding: 1rem;
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        }
+        
+        .btn {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+            font-weight: 500;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        .btn-secondary {
+            background: #f0f0f0;
+            color: #333;
+        }
+        
+        .btn-secondary:hover {
+            background: #e0e0e0;
+        }
+        
+        .file-input-wrapper {
+            position: relative;
+            display: inline-block;
+            overflow: hidden;
+        }
+        
+        .file-input {
+            position: absolute;
+            top: 0;
+            left: 0;
+            opacity: 0;
+            width: 100%;
+            height: 100%;
+            cursor: pointer;
+            z-index: 1;
+        }
+        
+        .file-input-label {
+            display: inline-block;
+            position: relative;
+            z-index: 0;
+        }
+        
+        #map {
+            flex: 1;
+            width: 100%;
+            position: relative;
+        }
+        
+        .status {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: white;
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 1000;
+            font-size: 0.85rem;
+            max-width: 300px;
+        }
+        
+        .status.success {
+            background: #10b981;
+            color: white;
+        }
+        
+        .status.error {
+            background: #ef4444;
+            color: white;
+        }
+        
+        .status.info {
+            background: #3b82f6;
+            color: white;
+        }
+        
+        .location-marker {
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0% {
+                box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7);
+            }
+            70% {
+                box-shadow: 0 0 0 10px rgba(59, 130, 246, 0);
+            }
+            100% {
+                box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🗺️ Simple GeoJson Plotting App</h1>
+    </div>
+    
+    <div class="controls">
+        <div class="file-input-wrapper">
+            <input type="file" class="file-input" id="geojsonInput" accept=".json,.geojson">
+            <button class="btn btn-primary file-input-label">
+                📁 Load GeoJSON File
+            </button>
+        </div>
+        
+        <button class="btn btn-secondary" id="locateBtn">
+            📍 Show My Location
+        </button>
+        
+        <button class="btn btn-secondary" id="trackBtn">
+            🛰️ Start Tracking
+        </button>
+        
+        <button class="btn btn-secondary" id="clearBtn">
+            🗑️ Clear Layers
+        </button>
+        
+        <button class="btn btn-secondary" id="zoomToDataBtn">
+            🔍 Zoom to Data
+        </button>
+    </div>
+    
+    <div id="map"></div>
+    
+    <div class="status" id="status" style="display: none;"></div>
+    
+    <!-- Leaflet JS -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+    
+    <script>
+        // Modular Map Application
+        const MapApp = (function() {
+            'use strict';
+            
+            // Module: Map Manager
+            const MapManager = {
+                map: null,
+                defaultCenter: [18.2208, -66.5901], // Puerto Rico coordinates
+                defaultZoom: 9,
+                
+                init() {
+                    this.map = L.map('map').setView(this.defaultCenter, this.defaultZoom);
+                    
+                    // Add tile layer with dark mode option
+                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                        attribution: '© OpenStreetMap contributors',
+                        maxZoom: 19
+                    }).addTo(this.map);
+                    
+                    return this.map;
+                },
+                
+                getMap() {
+                    return this.map;
+                },
+                
+                zoomToBounds(bounds) {
+                    this.map.fitBounds(bounds, { padding: [50, 50] });
+                }
+            };
+            
+            // Module: GeoJSON Handler
+            const GeoJSONHandler = {
+                currentLayer: null,
+                
+                validateGeoJSON(geojson) {
+                    const errors = [];
+                    const warnings = [];
+                    let featureCount = 0;
+                    let validFeatures = 0;
+                    
+                    // Check if it's a valid GeoJSON structure
+                    if (!geojson || typeof geojson !== 'object') {
+                        errors.push('Invalid GeoJSON: Not an object');
+                        return { valid: false, errors, warnings, featureCount: 0, validFeatures: 0 };
+                    }
+                    
+                    // Check for type property
+                    if (!geojson.type) {
+                        warnings.push('Missing "type" property, assuming FeatureCollection');
+                        geojson.type = 'FeatureCollection';
+                    }
+                    
+                    // Handle different GeoJSON types
+                    if (geojson.type === 'FeatureCollection') {
+                        if (!geojson.features) {
+                            warnings.push('FeatureCollection missing "features" array, creating empty array');
+                            geojson.features = [];
+                        } else if (!Array.isArray(geojson.features)) {
+                            errors.push('Features property is not an array');
+                            return { valid: false, errors, warnings, featureCount: 0, validFeatures: 0 };
+                        }
+                        
+                        // Validate each feature
+                        geojson.features = geojson.features.filter((feature, index) => {
+                            featureCount++;
+                            const featureErrors = this.validateFeature(feature, index);
+                            if (featureErrors.length > 0) {
+                                warnings.push(...featureErrors);
+                                return false; // Filter out invalid features
+                            }
+                            validFeatures++;
+                            return true;
+                        });
+                        
+                    } else if (geojson.type === 'Feature') {
+                        // Single feature, wrap in FeatureCollection
+                        warnings.push('Single Feature found, wrapping in FeatureCollection');
+                        featureCount = 1;
+                        const featureErrors = this.validateFeature(geojson, 0);
+                        if (featureErrors.length === 0) {
+                            validFeatures = 1;
+                            geojson = {
+                                type: 'FeatureCollection',
+                                features: [geojson]
+                            };
+                        } else {
+                            warnings.push(...featureErrors);
+                            geojson = {
+                                type: 'FeatureCollection',
+                                features: []
+                            };
+                        }
+                    } else if (geojson.type === 'Point' || geojson.type === 'LineString' || 
+                              geojson.type === 'Polygon' || geojson.type === 'MultiPoint' || 
+                              geojson.type === 'MultiLineString' || geojson.type === 'MultiPolygon') {
+                        // Raw geometry, wrap in Feature then FeatureCollection
+                        warnings.push('Raw geometry found, wrapping in Feature and FeatureCollection');
+                        featureCount = 1;
+                        validFeatures = 1;
+                        geojson = {
+                            type: 'FeatureCollection',
+                            features: [{
+                                type: 'Feature',
+                                geometry: geojson,
+                                properties: {}
+                            }]
+                        };
+                    }
+                    
+                    // Log validation results
+                    console.group('🔍 GeoJSON Validation Results');
+                    console.log(`Total features: ${featureCount}`);
+                    console.log(`Valid features: ${validFeatures}`);
+                    console.log(`Invalid features: ${featureCount - validFeatures}`);
+                    
+                    if (errors.length > 0) {
+                        console.error('❌ Errors:', errors);
+                    }
+                    if (warnings.length > 0) {
+                        console.warn('⚠️ Warnings:', warnings);
+                    }
+                    if (validFeatures > 0) {
+                        console.log('✅ GeoJSON processed successfully with', validFeatures, 'valid features');
+                    }
+                    console.groupEnd();
+                    
+                    return {
+                        valid: validFeatures > 0,
+                        errors,
+                        warnings,
+                        featureCount,
+                        validFeatures,
+                        geojson
+                    };
+                },
+                
+                validateFeature(feature, index) {
+                    const errors = [];
+                    
+                    if (!feature || typeof feature !== 'object') {
+                        errors.push(`Feature ${index}: Not an object`);
+                        return errors;
+                    }
+                    
+                    // Check feature type
+                    if (!feature.type || feature.type !== 'Feature') {
+                        errors.push(`Feature ${index}: Invalid or missing type (expected "Feature")`);
+                    }
+                    
+                    // Validate geometry
+                    if (!feature.geometry) {
+                        errors.push(`Feature ${index}: Missing geometry`);
+                    } else if (!feature.geometry.type) {
+                        errors.push(`Feature ${index}: Geometry missing type`);
+                    } else if (!feature.geometry.coordinates) {
+                        errors.push(`Feature ${index}: Geometry missing coordinates`);
+                    } else {
+                        // Validate coordinates based on geometry type
+                        const coordErrors = this.validateCoordinates(
+                            feature.geometry.coordinates, 
+                            feature.geometry.type, 
+                            index
+                        );
+                        errors.push(...coordErrors);
+                    }
+                    
+                    // Ensure properties exist
+                    if (!feature.properties) {
+                        feature.properties = {};
+                    }
+                    
+                    return errors;
+                },
+                
+                validateCoordinates(coords, type, featureIndex) {
+                    const errors = [];
+                    
+                    try {
+                        switch(type) {
+                            case 'Point':
+                                if (!Array.isArray(coords) || coords.length < 2) {
+                                    errors.push(`Feature ${featureIndex}: Invalid Point coordinates`);
+                                }
+                                break;
+                            case 'LineString':
+                                if (!Array.isArray(coords) || coords.length < 2) {
+                                    errors.push(`Feature ${featureIndex}: LineString needs at least 2 coordinates`);
+                                }
+                                break;
+                            case 'Polygon':
+                                if (!Array.isArray(coords) || coords.length === 0) {
+                                    errors.push(`Feature ${featureIndex}: Invalid Polygon coordinates`);
+                                } else if (!Array.isArray(coords[0]) || coords[0].length < 4) {
+                                    errors.push(`Feature ${featureIndex}: Polygon ring needs at least 4 coordinates`);
+                                }
+                                break;
+                            // Add more geometry types as needed
+                        }
+                    } catch (e) {
+                        errors.push(`Feature ${featureIndex}: Coordinate validation error - ${e.message}`);
+                    }
+                    
+                    return errors;
+                },
+                
+                attemptRepair(text) {
+                    console.group('🔧 Attempting JSON Repair');
+                    let repaired = text;
+                    const fixes = [];
+                    
+                    // Remove BOM if present
+                    if (repaired.charCodeAt(0) === 0xFEFF) {
+                        repaired = repaired.slice(1);
+                        fixes.push('Removed BOM character');
+                    }
+                    
+                    // Fix common JSON issues
+                    // Remove trailing commas
+                    repaired = repaired.replace(/,\s*}/g, '}');
+                    repaired = repaired.replace(/,\s*\]/g, ']');
+                    if (repaired !== text) fixes.push('Removed trailing commas');
+                    
+                    // Fix single quotes (carefully, to avoid breaking content)
+                    const singleQuoteFixed = repaired.replace(/'([^']*)':/g, '"$1":');
+                    if (singleQuoteFixed !== repaired) {
+                        repaired = singleQuoteFixed;
+                        fixes.push('Replaced single quotes in property names');
+                    }
+                    
+                    // Remove comments (JSON doesn't support comments)
+                    repaired = repaired.replace(/\/\*[\s\S]*?\*\//g, ''); // Block comments
+                    repaired = repaired.replace(/\/\/.*$/gm, ''); // Line comments
+                    if (repaired.includes('//') === false && text.includes('//')) {
+                        fixes.push('Removed comments');
+                    }
+                    
+                    // Try to fix incomplete JSON by adding closing brackets
+                    const openBraces = (repaired.match(/{/g) || []).length;
+                    const closeBraces = (repaired.match(/}/g) || []).length;
+                    const openBrackets = (repaired.match(/\[/g) || []).length;
+                    const closeBrackets = (repaired.match(/\]/g) || []).length;
+                    
+                    if (openBraces > closeBraces) {
+                        repaired += '}'.repeat(openBraces - closeBraces);
+                        fixes.push(`Added ${openBraces - closeBraces} closing brace(s)`);
+                    }
+                    if (openBrackets > closeBrackets) {
+                        repaired += ']'.repeat(openBrackets - closeBrackets);
+                        fixes.push(`Added ${openBrackets - closeBrackets} closing bracket(s)`);
+                    }
+                    
+                    if (fixes.length > 0) {
+                        console.log('🔧 Applied fixes:', fixes);
+                    } else {
+                        console.log('No automatic fixes applied');
+                    }
+                    console.groupEnd();
+                    
+                    return repaired;
+                },
+                
+                loadFile(file) {
+                    return new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        
+                        console.group(`📁 Loading GeoJSON file: ${file.name}`);
+                        console.log('File size:', (file.size / 1024).toFixed(2), 'KB');
+                        console.log('File type:', file.type || 'unknown');
+                        
+                        reader.onload = (e) => {
+                            let geojson;
+                            const originalText = e.target.result;
+                            
+                            try {
+                                // First attempt: parse as-is
+                                geojson = JSON.parse(originalText);
+                                console.log('✅ JSON parsed successfully on first attempt');
+                            } catch (error) {
+                                console.warn('❌ Initial JSON parse failed:', error.message);
+                                
+                                // Second attempt: try to repair common issues
+                                try {
+                                    const repairedText = this.attemptRepair(originalText);
+                                    geojson = JSON.parse(repairedText);
+                                    console.log('✅ JSON parsed successfully after repair');
+                                } catch (repairError) {
+                                    console.error('❌ JSON parse failed after repair attempt:', repairError.message);
+                                    
+                                    // Try to extract partial data
+                                    try {
+                                        // Look for features array pattern
+                                        const featuresMatch = originalText.match(/"features"\s*:\s*\[([\s\S]*?)\]/);
+                                        if (featuresMatch) {
+                                            const featuresText = '[' + featuresMatch[1] + ']';
+                                            const features = JSON.parse(featuresText);
+                                            geojson = {
+                                                type: 'FeatureCollection',
+                                                features: features
+                                            };
+                                            console.log('⚠️ Extracted partial data from malformed JSON');
+                                        } else {
+                                            throw repairError;
+                                        }
+                                    } catch (extractError) {
+                                        console.error('❌ Could not extract any valid data');
+                                        console.groupEnd();
+                                        reject(new Error(`Invalid JSON: ${error.message}`));
+                                        return;
+                                    }
+                                }
+                            }
+                            
+                            // Validate and clean the GeoJSON
+                            const validation = this.validateGeoJSON(geojson);
+                            
+                            if (!validation.valid) {
+                                console.error('❌ No valid features found in GeoJSON');
+                                console.groupEnd();
+                                reject(new Error('No valid features found in the file'));
+                                return;
+                            }
+                            
+                            // Use the validated/repaired GeoJSON
+                            geojson = validation.geojson;
+                            
+                            // Add to map
+                            try {
+                                this.addToMap(geojson);
+                                console.log(`✅ Successfully loaded ${validation.validFeatures} features to map`);
+                                if (validation.featureCount > validation.validFeatures) {
+                                    console.warn(`⚠️ Skipped ${validation.featureCount - validation.validFeatures} invalid features`);
+                                }
+                                console.groupEnd();
+                                resolve({
+                                    geojson,
+                                    stats: {
+                                        total: validation.featureCount,
+                                        valid: validation.validFeatures,
+                                        invalid: validation.featureCount - validation.validFeatures
+                                    }
+                                });
+                            } catch (mapError) {
+                                console.error('❌ Error adding to map:', mapError);
+                                console.groupEnd();
+                                reject(new Error('Error displaying features on map'));
+                            }
+                        };
+                        
+                        reader.onerror = () => {
+                            console.error('❌ Error reading file');
+                            console.groupEnd();
+                            reject(new Error('Error reading file'));
+                        };
+                        
+                        reader.readAsText(file);
+                    });
+                },
+                
+                addToMap(geojson) {
+                    const map = MapManager.getMap();
+                    
+                    // Remove existing layer if present
+                    if (this.currentLayer) {
+                        map.removeLayer(this.currentLayer);
+                    }
+                    
+                    // Style function for features
+                    const style = (feature) => {
+                        return {
+                            color: '#764ba2',
+                            weight: 2,
+                            opacity: 0.8,
+                            fillOpacity: 0.3,
+                            fillColor: '#667eea'
+                        };
+                    };
+                    
+                    // Create new layer with popups
+                    this.currentLayer = L.geoJSON(geojson, {
+                        style: style,
+                        onEachFeature: (feature, layer) => {
+                            if (feature.properties) {
+                                const props = feature.properties;
+                                let popupContent = '<div style="max-width: 200px;">';
+                                popupContent += '<h3 style="margin: 0 0 10px 0;">Feature Properties</h3>';
+                                
+                                for (const [key, value] of Object.entries(props)) {
+                                    popupContent += `<strong>${key}:</strong> ${value}<br>`;
+                                }
+                                
+                                popupContent += '</div>';
+                                layer.bindPopup(popupContent);
+                            }
+                        },
+                        pointToLayer: (feature, latlng) => {
+                            return L.circleMarker(latlng, {
+                                radius: 8,
+                                fillColor: '#764ba2',
+                                color: '#fff',
+                                weight: 2,
+                                opacity: 1,
+                                fillOpacity: 0.8
+                            });
+                        }
+                    }).addTo(map);
+                    
+                    // Zoom to layer bounds
+                    const bounds = this.currentLayer.getBounds();
+                    if (bounds.isValid()) {
+                        MapManager.zoomToBounds(bounds);
+                    }
+                },
+                
+                clear() {
+                    const map = MapManager.getMap();
+                    if (this.currentLayer) {
+                        map.removeLayer(this.currentLayer);
+                        this.currentLayer = null;
+                    }
+                },
+                
+                getBounds() {
+                    return this.currentLayer ? this.currentLayer.getBounds() : null;
+                }
+            };
+            
+            // Module: Location Services
+            const LocationServices = {
+                locationMarker: null,
+                locationCircle: null,
+                watchId: null,
+                isTracking: false,
+                trackingPath: null,
+                trackingCoordinates: [],
+                
+                getCurrentLocation() {
+                    return new Promise((resolve, reject) => {
+                        if (!navigator.geolocation) {
+                            reject(new Error('Geolocation not supported'));
+                            return;
+                        }
+                        
+                        navigator.geolocation.getCurrentPosition(
+                            position => resolve(position),
+                            error => reject(error),
+                            {
+                                enableHighAccuracy: true,
+                                timeout: 10000,
+                                maximumAge: 0
+                            }
+                        );
+                    });
+                },
+                
+                startTracking(onUpdate, onError) {
+                    if (!navigator.geolocation) {
+                        onError(new Error('Geolocation not supported'));
+                        return;
+                    }
+                    
+                    // Initialize tracking path
+                    if (!this.trackingPath) {
+                        const map = MapManager.getMap();
+                        this.trackingPath = L.polyline([], {
+                            color: '#3b82f6',
+                            weight: 3,
+                            opacity: 0.6,
+                            smoothFactor: 1
+                        }).addTo(map);
+                    }
+                    
+                    this.isTracking = true;
+                    this.watchId = navigator.geolocation.watchPosition(
+                        (position) => {
+                            this.updateUserLocation(position);
+                            if (onUpdate) onUpdate(position);
+                        },
+                        (error) => {
+                            if (onError) onError(error);
+                        },
+                        {
+                            enableHighAccuracy: true,
+                            timeout: 5000,
+                            maximumAge: 0
+                        }
+                    );
+                },
+                
+                stopTracking() {
+                    if (this.watchId !== null) {
+                        navigator.geolocation.clearWatch(this.watchId);
+                        this.watchId = null;
+                        this.isTracking = false;
+                    }
+                },
+                
+                updateUserLocation(position) {
+                    const map = MapManager.getMap();
+                    const lat = position.coords.latitude;
+                    const lng = position.coords.longitude;
+                    const accuracy = position.coords.accuracy;
+                    
+                    // Remove existing markers
+                    if (this.locationMarker) {
+                        map.removeLayer(this.locationMarker);
+                    }
+                    if (this.locationCircle) {
+                        map.removeLayer(this.locationCircle);
+                    }
+                    
+                    // Add marker for user location
+                    this.locationMarker = L.marker([lat, lng], {
+                        icon: L.divIcon({
+                            className: 'location-marker',
+                            html: '<div style="background: #3b82f6; width: 20px; height: 20px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 5px rgba(0,0,0,0.3);"></div>',
+                            iconSize: [20, 20]
+                        })
+                    }).addTo(map);
+                    
+                    // Add accuracy circle
+                    this.locationCircle = L.circle([lat, lng], {
+                        radius: accuracy,
+                        color: '#3b82f6',
+                        fillColor: '#3b82f6',
+                        fillOpacity: 0.1,
+                        weight: 2
+                    }).addTo(map);
+                    
+                    // Update popup
+                    const speed = position.coords.speed ? 
+                        `<br>Speed: ${(position.coords.speed * 3.6).toFixed(1)} km/h` : '';
+                    
+                    this.locationMarker.bindPopup(
+                        `<strong>${this.isTracking ? '🔴 Tracking' : 'Your Location'}</strong><br>
+                        Latitude: ${lat.toFixed(6)}<br>
+                        Longitude: ${lng.toFixed(6)}<br>
+                        Accuracy: ${accuracy.toFixed(0)}m${speed}`
+                    );
+                    
+                    // Add to tracking path if tracking
+                    if (this.isTracking && this.trackingPath) {
+                        this.trackingCoordinates.push([lat, lng]);
+                        this.trackingPath.setLatLngs(this.trackingCoordinates);
+                        
+                        // Center map on location only if marker is not in view
+                        if (!map.getBounds().contains([lat, lng])) {
+                            map.setView([lat, lng], map.getZoom());
+                        }
+                    } else {
+                        // Center map on location for single location request
+                        map.setView([lat, lng], 15);
+                    }
+                },
+                
+                showUserLocation(position) {
+                    this.updateUserLocation(position);
+                    this.locationMarker.openPopup();
+                },
+                
+                clearLocation() {
+                    const map = MapManager.getMap();
+                    if (this.locationMarker) {
+                        map.removeLayer(this.locationMarker);
+                        this.locationMarker = null;
+                    }
+                    if (this.locationCircle) {
+                        map.removeLayer(this.locationCircle);
+                        this.locationCircle = null;
+                    }
+                    if (this.trackingPath) {
+                        map.removeLayer(this.trackingPath);
+                        this.trackingPath = null;
+                        this.trackingCoordinates = [];
+                    }
+                    this.stopTracking();
+                }
+            };
+            
+            // Module: UI Controller
+            const UIController = {
+                statusTimeout: null,
+                
+                showStatus(message, type = 'info', duration = 3000) {
+                    const statusEl = document.getElementById('status');
+                    
+                    // Clear existing timeout
+                    if (this.statusTimeout) {
+                        clearTimeout(this.statusTimeout);
+                    }
+                    
+                    // Update status
+                    statusEl.textContent = message;
+                    statusEl.className = `status ${type}`;
+                    statusEl.style.display = 'block';
+                    
+                    // Auto-hide after duration
+                    if (duration > 0) {
+                        this.statusTimeout = setTimeout(() => {
+                            statusEl.style.display = 'none';
+                        }, duration);
+                    }
+                },
+                
+                bindEvents() {
+                    // GeoJSON file input
+                    document.getElementById('geojsonInput').addEventListener('change', async (e) => {
+                        const file = e.target.files[0];
+                        if (!file) return;
+                        
+                        try {
+                            this.showStatus('Loading GeoJSON...', 'info');
+                            await GeoJSONHandler.loadFile(file);
+                            this.showStatus(`Loaded: ${file.name}`, 'success');
+                        } catch (error) {
+                            this.showStatus(error.message, 'error');
+                        }
+                        
+                        // Reset input
+                        e.target.value = '';
+                    });
+                    
+                    // Location button
+                    document.getElementById('locateBtn').addEventListener('click', async () => {
+                        try {
+                            this.showStatus('Getting your location...', 'info');
+                            const position = await LocationServices.getCurrentLocation();
+                            LocationServices.showUserLocation(position);
+                            this.showStatus('Location found!', 'success');
+                        } catch (error) {
+                            let message = 'Location access denied';
+                            if (error.code === 1) {
+                                message = 'Please enable location permissions';
+                            } else if (error.code === 2) {
+                                message = 'Location unavailable';
+                            } else if (error.code === 3) {
+                                message = 'Location request timed out';
+                            }
+                            this.showStatus(message, 'error');
+                        }
+                    });
+                    
+                    // Tracking button
+                    document.getElementById('trackBtn').addEventListener('click', () => {
+                        const btn = document.getElementById('trackBtn');
+                        
+                        if (!LocationServices.isTracking) {
+                            // Start tracking
+                            LocationServices.startTracking(
+                                (position) => {
+                                    // Update callback
+                                    this.showStatus('📍 Tracking location...', 'info', 1000);
+                                },
+                                (error) => {
+                                    // Error callback
+                                    let message = 'Tracking error';
+                                    if (error.code === 1) {
+                                        message = 'Location permissions denied';
+                                    } else if (error.code === 2) {
+                                        message = 'Location unavailable';
+                                    }
+                                    this.showStatus(message, 'error');
+                                    btn.textContent = '🛰️ Start Tracking';
+                                    btn.classList.remove('btn-primary');
+                                    btn.classList.add('btn-secondary');
+                                }
+                            );
+                            btn.textContent = '⏸️ Stop Tracking';
+                            btn.classList.remove('btn-secondary');
+                            btn.classList.add('btn-primary');
+                            this.showStatus('Location tracking started', 'success');
+                        } else {
+                            // Stop tracking
+                            LocationServices.stopTracking();
+                            btn.textContent = '🛰️ Start Tracking';
+                            btn.classList.remove('btn-primary');
+                            btn.classList.add('btn-secondary');
+                            this.showStatus('Location tracking stopped', 'info');
+                        }
+                    });
+                    
+                    // Clear button
+                    document.getElementById('clearBtn').addEventListener('click', () => {
+                        GeoJSONHandler.clear();
+                        LocationServices.clearLocation();
+                        this.showStatus('All layers cleared', 'info');
+                    });
+                    
+                    // Zoom to data button
+                    document.getElementById('zoomToDataBtn').addEventListener('click', () => {
+                        const bounds = GeoJSONHandler.getBounds();
+                        if (bounds && bounds.isValid()) {
+                            MapManager.zoomToBounds(bounds);
+                            this.showStatus('Zoomed to data extent', 'info');
+                        } else {
+                            this.showStatus('No data to zoom to', 'error');
+                        }
+                    });
+                }
+            };
+            
+            // Initialize application
+            const init = () => {
+                MapManager.init();
+                UIController.bindEvents();
+                UIController.showStatus('Ready! Load a GeoJSON file or show your location', 'info', 5000);
+            };
+            
+            // Public API
+            return {
+                init,
+                MapManager,
+                GeoJSONHandler,
+                LocationServices,
+                UIController
+            };
+        })();
+        
+        // Start the application when DOM is ready
+        document.addEventListener('DOMContentLoaded', () => {
+            MapApp.init();
+        });
+    </script>
+</body>
+</html>
